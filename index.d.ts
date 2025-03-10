@@ -2,7 +2,6 @@ import {
   AbstractLevel,
   AbstractDatabaseOptions,
   AbstractOpenOptions,
-  NodeCallback
 } from 'abstract-level'
 
 // Requires `npm install @types/readable-stream`.
@@ -25,8 +24,6 @@ export class ManyLevelGuest<KDefault = string, VDefault = string>
 
   open (): Promise<void>
   open (options: GuestOpenOptions): Promise<void>
-  open (callback: NodeCallback<void>): void
-  open (options: GuestOpenOptions, callback: NodeCallback<void>): void
 
   /**
    * Create a duplex guest stream to be piped into a host stream. Until that's done,
@@ -158,17 +155,17 @@ declare interface HostOptions {
   /**
    * A function to be called before `db.put()` operations.
    */
-  preput?: (key: Buffer, value: Buffer, callback: NodeCallback<void>) => void
+  preput?: (key: Buffer, value: Buffer) => Promise<void>
 
   /**
    * A function to be called before `db.del()` operations.
    */
-  predel?: (key: Buffer, callback: NodeCallback<void>) => void
+  predel?: (key: Buffer) => Promise<void>
 
   /**
    * A function to be called before `db.batch()` operations.
    */
-  prebatch?: (operations: HostBatchOperation[], callback: NodeCallback<void>) => void
+  prebatch?: (operations: HostBatchOperation[]) => Promise<void>
 }
 
 declare type HostBatchOperation = HostBatchPutOperation | HostBatchDelOperation
