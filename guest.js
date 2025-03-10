@@ -208,102 +208,96 @@ class ManyLevelGuest extends AbstractLevel {
     }
   }
 
-  _get (key, opts, cb) {
+  async _get (key, opts) {
     // TODO: this and other methods assume db state matches our state
-    if (this[kDb]) return this[kDb]._get(key, opts, cb)
+    if (this[kDb]) return this[kDb]._get(key, opts)
 
     const req = {
       tag: input.get,
       id: 0,
-      key: key,
-      callback: cb
+      key: key
     }
 
     req.id = this[kRequests].add(req)
-    this[kWrite](req)
+    req.promise = this[kWrite](req)
   }
 
-  _getMany (keys, opts, cb) {
-    if (this[kDb]) return this[kDb]._getMany(keys, opts, cb)
+  async _getMany (keys, opts) {
+    if (this[kDb]) return this[kDb]._getMany(keys, opts)
 
     const req = {
       tag: input.getMany,
       id: 0,
-      keys: keys,
-      callback: cb
+      keys: keys
     }
 
     req.id = this[kRequests].add(req)
-    this[kWrite](req)
+    req.promise = this[kWrite](req)
   }
 
-  _put (key, value, opts, cb) {
-    if (this[kDb]) return this[kDb]._put(key, value, opts, cb)
+  async _put (key, value, opts) {
+    if (this[kDb]) return this[kDb]._put(key, value, opts)
 
     const req = {
       tag: input.put,
       id: 0,
       key: key,
-      value: value,
-      callback: cb
+      value: value
     }
 
     req.id = this[kRequests].add(req)
-    this[kWrite](req)
+    req.promise = this[kWrite](req)
   }
 
-  _del (key, opts, cb) {
-    if (this[kDb]) return this[kDb]._del(key, opts, cb)
+  async _del (key, opts) {
+    if (this[kDb]) return this[kDb]._del(key, opts)
 
     const req = {
       tag: input.del,
       id: 0,
-      key: key,
-      callback: cb
+      key: key
     }
 
     req.id = this[kRequests].add(req)
-    this[kWrite](req)
+    req.promise = this[kWrite](req)
   }
 
-  _batch (batch, opts, cb) {
-    if (this[kDb]) return this[kDb]._batch(batch, opts, cb)
+  async _batch (batch, opts) {
+    if (this[kDb]) return this[kDb]._batch(batch, opts)
 
     const req = {
       tag: input.batch,
       id: 0,
-      ops: batch,
-      callback: cb
+      ops: batch
     }
 
     req.id = this[kRequests].add(req)
-    this[kWrite](req)
+    req.promise = this[kWrite](req)
   }
 
-  _clear (opts, cb) {
-    if (this[kDb]) return this[kDb]._clear(opts, cb)
+  async _clear (opts) {
+    if (this[kDb]) return this[kDb]._clear(opts)
 
     const req = {
       tag: input.clear,
       id: 0,
-      options: opts,
-      callback: cb
+      options: opts
     }
 
     req.id = this[kRequests].add(req)
-    this[kWrite](req)
+    req.promise = this[kWrite](req)
   }
 
-  [kWrite] (req) {
+  async [kWrite] (req) {
     if (this[kRequests].size + this[kIterators].size === 1) ref(this[kRef])
     const enc = input.encoding(req.tag)
     const buf = Buffer.allocUnsafe(enc.encodingLength(req) + 1)
     buf[0] = req.tag
     enc.encode(req, buf, 1)
-    this[kEncode].write(buf)
+    return this[kEncode].write(buf)
   }
 
-  _close (cb) {
+  async _close () {
     // Even if forward() was used, still need to abort requests made before forward().
     this[kExplicitClose] = true
     this[kAbortRequests]('Aborted on database close()', 'LEVEL_DATABASE_NOT_OPEN')
@@ -311,18 +305,16 @@ class ManyLevelGuest extends AbstractLevel {
     if (this[kRpcStream]) {
       finished(this[kRpcStream], () => {
         this[kRpcStream] = null
-        this._close(cb)
+        this._close()
       })
       this[kRpcStream].destroy()
     } else if (this[kDb]) {
       // To be safe, use close() not _close().
-      this[kDb].close(cb)
-    } else {
-      this.nextTick(cb)
+      this[kDb].close()
     }
   }
 
-  _open (options, cb) {
+  async _open (options) {
     if (this[kRemote]) {
       // For tests only so does not need error handling
       this[kExplicitClose] = false
@@ -338,8 +330,6 @@ class ManyLevelGuest extends AbstractLevel {
         code: 'LEVEL_NOT_SUPPORTED'
       })
     }
-
-    this.nextTick(cb)
   }
 
   iterator (options) {
@@ -369,7 +359,6 @@ class Iterator extends AbstractIterator {
     this[kEnded] = false
     this[kErrored] = false
     this[kPending] = []
-    this[kCallback] = null
     this[kSeq] = 0
 
     const req = this[kRequest] = {
@@ -419,12 +408,16 @@ class Iterator extends AbstractIterator {
   }
 
   // TODO: implement optimized `nextv()`
-  _next (callback) {
-    this[kCallback] = null
-
+  async _next () {
     if (this[kRequest].consumed >= this.limit || this[kErrored]) {
-      this.nextTick(callback)
-    } else if (this[kPending].length !== 0) {
+      return
+    } else if (this[kEnded]) {
+      return
+      // TODO: no more callbacks, verify what to do with this[kCallback]
+      // } else {
+      //   this[kCallback] = callback
+    }
+    if (this[kPending].length !== 0) {
       const next = this[kPending][0]
       const req = this[kRequest]
 
@@ -433,9 +426,9 @@ class Iterator extends AbstractIterator {
         this[kErrored] = true
         this[kPending] = []
 
-        return this.nextTick(callback, new ModuleError('Could not read entry', {
+        throw new ModuleError('Could not read entry', {
           code: next.error
-        }))
+        })
       }
 
       const consumed = ++req.consumed
@@ -459,19 +452,15 @@ class Iterator extends AbstractIterator {
         req.bookmark = key
       }
 
-      this.nextTick(callback, undefined, key, val)
-    } else if (this[kEnded]) {
-      this.nextTick(callback)
-    } else {
-      this[kCallback] = callback
+      // TODO: is this the right return type??
+      return [key, val]
     }
   }
 
-  _close (cb) {
-    this.db[kWrite]({ tag: input.iteratorClose, id: this[kRequest].id })
+  async _close () {
+    await this.db[kWrite]({ tag: input.iteratorClose, id: this[kRequest].id })
     this.db[kIterators].remove(this[kRequest].id)
     this.db[kFlushed]()
-    this.nextTick(cb)
   }
 }
 
