@@ -135,6 +135,7 @@ class ManyLevelGuest extends AbstractLevel {
       const req = self[kIterators].get(res.id)
       if (!req || req.iterator[kSeq] !== res.seq) return
       req.iterator[kPending].push(res)
+      // TODO: deprecate callbacks
       if (req.iterator[kCallback]) req.iterator._next(req.iterator[kCallback])
     }
 
@@ -143,9 +144,11 @@ class ManyLevelGuest extends AbstractLevel {
       if (!req || req.iterator[kSeq] !== res.seq) return
       // https://github.com/Level/abstract-level/issues/19
       req.iterator[kEnded] = true
+      // TODO: deprecate callbacks
       if (req.iterator[kCallback]) req.iterator._next(req.iterator[kCallback])
     }
 
+    // TODO: no more callbacks
     function oncallback (res) {
       const req = self[kRequests].remove(res.id)
       if (!req) return
@@ -153,6 +156,7 @@ class ManyLevelGuest extends AbstractLevel {
       else req.promise.then(null, normalizeValue(res.value))
     }
 
+    // TODO: no more callbacks
     function ongetmanycallback (res) {
       const req = self[kRequests].remove(res.id)
       if (!req) return
@@ -197,6 +201,7 @@ class ManyLevelGuest extends AbstractLevel {
 
     for (const req of this[kIterators].clear()) {
       // Cancel in-flight operation if any
+      // TODO: do we need a new mechanism to pass the error back up to the request initiator?
       const callback = req.iterator[kCallback]
       req.iterator[kCallback] = null
 
@@ -310,6 +315,7 @@ class ManyLevelGuest extends AbstractLevel {
     this[kAbortRequests]('Aborted on database close()', 'LEVEL_DATABASE_NOT_OPEN')
 
     if (this[kRpcStream]) {
+      // TODO: need to do something with finished. Can we use readable-stream.promises or whatever?? That would make life much easier...
       finished(this[kRpcStream], () => {
         this[kRpcStream] = null
         this._close()
@@ -326,6 +332,7 @@ class ManyLevelGuest extends AbstractLevel {
       // For tests only so does not need error handling
       this[kExplicitClose] = false
       const remote = this[kRemote]()
+      // TODO: Need to promisify pipeline
       pipeline(
         remote,
         this.connect(),
