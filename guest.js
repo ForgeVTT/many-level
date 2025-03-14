@@ -149,15 +149,15 @@ class ManyLevelGuest extends AbstractLevel {
     function oncallback (res) {
       const req = self[kRequests].remove(res.id)
       if (!req) return
-      if (res.error) req.callback(new ModuleError('Could not get value', { code: res.error }))
-      else req.callback(null, normalizeValue(res.value))
+      if (res.error) req.promise.then(new ModuleError('Could not get value', { code: res.error }))
+      else req.promise.then(null, normalizeValue(res.value))
     }
 
     function ongetmanycallback (res) {
       const req = self[kRequests].remove(res.id)
       if (!req) return
-      if (res.error) req.callback(new ModuleError('Could not get values', { code: res.error }))
-      else req.callback(null, res.values.map(v => normalizeValue(v.value)))
+      if (res.error) req.promise.then(new ModuleError('Could not get values', { code: res.error }))
+      else req.promise.then(null, res.values.map(v => normalizeValue(v.value)))
     }
   }
 
@@ -191,7 +191,8 @@ class ManyLevelGuest extends AbstractLevel {
 
   [kAbortRequests] (msg, code) {
     for (const req of this[kRequests].clear()) {
-      req.callback(new ModuleError(msg, { code }))
+      // TODO: this doesn't actually abort the request, but neither did the old way
+      req.promise.then(new ModuleError(msg, { code }))
     }
 
     for (const req of this[kIterators].clear()) {
@@ -220,6 +221,7 @@ class ManyLevelGuest extends AbstractLevel {
 
     req.id = this[kRequests].add(req)
     req.promise = this[kWrite](req)
+    return req.promise
   }
 
   async _getMany (keys, opts) {
@@ -233,6 +235,7 @@ class ManyLevelGuest extends AbstractLevel {
 
     req.id = this[kRequests].add(req)
     req.promise = this[kWrite](req)
+    return req.promise
   }
 
   async _put (key, value, opts) {
@@ -247,6 +250,7 @@ class ManyLevelGuest extends AbstractLevel {
 
     req.id = this[kRequests].add(req)
     req.promise = this[kWrite](req)
+    return req.promise
   }
 
   async _del (key, opts) {
@@ -260,6 +264,7 @@ class ManyLevelGuest extends AbstractLevel {
 
     req.id = this[kRequests].add(req)
     req.promise = this[kWrite](req)
+    return req.promise
   }
 
   async _batch (batch, opts) {
@@ -273,6 +278,7 @@ class ManyLevelGuest extends AbstractLevel {
 
     req.id = this[kRequests].add(req)
     req.promise = this[kWrite](req)
+    return req.promise
   }
 
   async _clear (opts) {
@@ -286,6 +292,7 @@ class ManyLevelGuest extends AbstractLevel {
 
     req.id = this[kRequests].add(req)
     req.promise = this[kWrite](req)
+    return req.promise
   }
 
   async [kWrite] (req) {
@@ -294,7 +301,7 @@ class ManyLevelGuest extends AbstractLevel {
     const buf = Buffer.allocUnsafe(enc.encodingLength(req) + 1)
     buf[0] = req.tag
     enc.encode(req, buf, 1)
-    return this[kEncode].write(buf)
+    return await this[kEncode].write(buf)
   }
 
   async _close () {
@@ -310,7 +317,7 @@ class ManyLevelGuest extends AbstractLevel {
       this[kRpcStream].destroy()
     } else if (this[kDb]) {
       // To be safe, use close() not _close().
-      this[kDb].close()
+      return this[kDb].close()
     }
   }
 
@@ -441,7 +448,7 @@ class Iterator extends AbstractIterator {
         // Acknowledge receipt. Not needed if we don't want more data.
         if (consumed < this.limit) {
           this[kAckMessage].consumed = consumed
-          this.db[kWrite](this[kAckMessage])
+          await this.db[kWrite](this[kAckMessage])
         }
       }
 
@@ -453,7 +460,7 @@ class Iterator extends AbstractIterator {
       }
 
       // TODO: is this the right return type??
-      return [key, val]
+      return val
     }
   }
 

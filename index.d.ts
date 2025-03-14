@@ -1,7 +1,7 @@
 import {
   AbstractLevel,
   AbstractDatabaseOptions,
-  AbstractOpenOptions,
+  AbstractOpenOptions
 } from 'abstract-level'
 
 // Requires `npm install @types/readable-stream`.
