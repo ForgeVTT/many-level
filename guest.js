@@ -148,20 +148,16 @@ class ManyLevelGuest extends AbstractLevel {
       if (req.iterator[kCallback]) req.iterator._next(req.iterator[kCallback])
     }
 
-    // TODO: no more callbacks
     function oncallback (res) {
       const req = self[kRequests].remove(res.id)
-      if (!req) return
-      if (res.error) req.promise.then(new ModuleError('Could not get value', { code: res.error }))
-      else req.promise.then(null, normalizeValue(res.value))
+      if (!req || !req.callback) return
+      req.callback(new ModuleError('Could not get value', { code: res.error }), normalizeValue(res.value))
     }
 
-    // TODO: no more callbacks
     function ongetmanycallback (res) {
       const req = self[kRequests].remove(res.id)
-      if (!req) return
-      if (res.error) req.promise.then(new ModuleError('Could not get values', { code: res.error }))
-      else req.promise.then(null, res.values.map(v => normalizeValue(v.value)))
+      if (!req || !req.callback) return
+      req.callback(new ModuleError('Could not get value', { code: res.error }), normalizeValue(res.value))
     }
   }
 
@@ -196,9 +192,10 @@ class ManyLevelGuest extends AbstractLevel {
   [kAbortRequests] (msg, code) {
     for (const req of this[kRequests].clear()) {
       // TODO: this doesn't actually abort the request, but neither did the old way
-      req.promise.then(new ModuleError(msg, { code }))
+      req.callback(new ModuleError(msg, { code }))
     }
 
+    // TODO: iterators
     for (const req of this[kIterators].clear()) {
       // Cancel in-flight operation if any
       // TODO: do we need a new mechanism to pass the error back up to the request initiator?
@@ -218,86 +215,104 @@ class ManyLevelGuest extends AbstractLevel {
     // TODO: this and other methods assume db state matches our state
     if (this[kDb]) return this[kDb]._get(key, opts)
 
+    const promise = new Promise()
     const req = {
       tag: input.get,
       id: 0,
-      key: key
+      key: key,
+      callback: (err, value) => err ? promise.reject(err) : promise.resolve(value)
     }
 
     req.id = this[kRequests].add(req)
-    req.promise = this[kWrite](req)
-    return req.promise
+    this[kWrite](req)
+    // This should resolve or reject based on the Host's response
+    return promise
   }
 
   async _getMany (keys, opts) {
     if (this[kDb]) return this[kDb]._getMany(keys, opts)
 
+    const promise = new Promise()
     const req = {
       tag: input.getMany,
       id: 0,
-      keys: keys
+      keys: keys,
+      callback: (err, value) => err ? promise.reject(err) : promise.resolve(value)
     }
 
     req.id = this[kRequests].add(req)
-    req.promise = this[kWrite](req)
-    return req.promise
+    this[kWrite](req)
+    // This should resolve or reject based on the Host's response
+    return promise
   }
 
   async _put (key, value, opts) {
     if (this[kDb]) return this[kDb]._put(key, value, opts)
 
+    const promise = new Promise()
     const req = {
       tag: input.put,
       id: 0,
       key: key,
-      value: value
+      value: value,
+      callback: (err, value) => err ? promise.reject(err) : promise.resolve(value)
     }
 
     req.id = this[kRequests].add(req)
-    req.promise = this[kWrite](req)
-    return req.promise
+    this[kWrite](req)
+    // This should resolve or reject based on the Host's response
+    return promise
   }
 
   async _del (key, opts) {
     if (this[kDb]) return this[kDb]._del(key, opts)
 
+    const promise = new Promise()
     const req = {
       tag: input.del,
       id: 0,
-      key: key
+      key: key,
+      callback: (err, value) => err ? promise.reject(err) : promise.resolve(value)
     }
 
     req.id = this[kRequests].add(req)
-    req.promise = this[kWrite](req)
-    return req.promise
+    this[kWrite](req)
+    // This should resolve or reject based on the Host's response
+    return promise
   }
 
   async _batch (batch, opts) {
     if (this[kDb]) return this[kDb]._batch(batch, opts)
 
+    const promise = new Promise()
     const req = {
       tag: input.batch,
       id: 0,
-      ops: batch
+      ops: batch,
+      callback: (err, value) => err ? promise.reject(err) : promise.resolve(value)
     }
 
     req.id = this[kRequests].add(req)
-    req.promise = this[kWrite](req)
-    return req.promise
+    this[kWrite](req)
+    // This should resolve or reject based on the Host's response
+    return promise
   }
 
   async _clear (opts) {
     if (this[kDb]) return this[kDb]._clear(opts)
 
+    const promise = new Promise()
     const req = {
       tag: input.clear,
       id: 0,
-      options: opts
+      options: opts,
+      callback: (err, value) => err ? promise.reject(err) : promise.resolve(value)
     }
 
     req.id = this[kRequests].add(req)
-    req.promise = this[kWrite](req)
-    return req.promise
+    this[kWrite](req)
+    // This should resolve or reject based on the Host's response
+    return promise
   }
 
   async [kWrite] (req) {
@@ -306,7 +321,7 @@ class ManyLevelGuest extends AbstractLevel {
     const buf = Buffer.allocUnsafe(enc.encodingLength(req) + 1)
     buf[0] = req.tag
     enc.encode(req, buf, 1)
-    return await this[kEncode].write(buf)
+    return this[kEncode].write(buf)
   }
 
   async _close () {
