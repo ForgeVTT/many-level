@@ -39,7 +39,7 @@
     "faucet": "^0.0.3",
     "hallmark": "^4.0.0",
     "level-read-stream": "^1.1.0",
-    "memory-level": "^1.0.0",
+    "memory-level": "^2.0.0",
     "nyc": "^15.1.0",
     "protocol-buffers": "^5.0.0",
     "standard": "^16.0.3",
