@@ -151,13 +151,15 @@ class ManyLevelGuest extends AbstractLevel {
     function oncallback (res) {
       const req = self[kRequests].remove(res.id)
       if (!req || !req.callback) return
-      req.callback(res.error ? new ModuleError('Could not get value', { code: res.error }) : null, normalizeValue(res.value))
+      if (res.error) req.callback(new ModuleError('Could not get value', { code: res.error }))
+      else req.callback(null, normalizeValue(res.value))
     }
 
     function ongetmanycallback (res) {
       const req = self[kRequests].remove(res.id)
       if (!req || !req.callback) return
-      req.callback(res.error ? new ModuleError('Could not get value', { code: res.error }) : null, normalizeValue(res.value))
+      if (res.error) req.callback(new ModuleError('Could not get values', { code: res.error }))
+      else req.callback(null, res.values.map(v => normalizeValue(v.value)))
     }
   }
 
