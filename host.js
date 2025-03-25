@@ -65,7 +65,7 @@ function createRpcStream (db, options, streamOptions) {
   const predel = options.predel
   const prebatch = options.prebatch
 
-  db.open({ passive: true }, ready)
+  db.open({ passive: true }).then(() => ready()).catch(ready)
 
   // TODO: send events to guest. Challenges:
   // - Need to know encodings or emit encoded data; current abstract-level events don't suffice
