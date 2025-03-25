@@ -131,48 +131,55 @@ function createRpcStream (db, options, streamOptions) {
       encode.write(encodeMessage(msg, output.getManyCallback))
     }
 
-    function onput (req) {
-      preput(req.key, req.value, function (err) {
-        if (err) return callback(req.id, err)
-        db.put(req.key, req.value, encodingOptions, function (err) {
-          callback(req.id, err, null)
-        })
-      })
+    async function onput (req) {
+      preput(req.key, req.value, function (err) { return callback(req.id, err) })
+      try {
+        await db.put(req.key, req.value, encodingOptions)
+      } catch (err) {
+        return callback(req.id, err, null)
+      }
     }
 
-    function onget (req) {
-      db.get(req.key, encodingOptions, function (err, value) {
-        callback(req.id, err, value)
-      })
+    async function onget (req) {
+      try {
+        const value = await db.get(req.key, encodingOptions)
+        return callback(req.id, null, value)
+      } catch (err) {
+        return callback(req.id, err, null)
+      }
     }
 
-    function ongetmany (req) {
-      db.getMany(req.keys, encodingOptions, function (err, values) {
-        getManyCallback(req.id, err, values.map(value => ({ value })))
-      })
+    async function ongetmany (req) {
+      try {
+        const values = await db.getMany(req.keys, encodingOptions)
+        return getManyCallback(req.id, null, values.map(value => ({ value })))
+      } catch (err) {
+        return getManyCallback(req.id, err, [])
+      }
     }
 
-    function ondel (req) {
-      predel(req.key, function (err) {
-        if (err) return callback(req.id, err)
-        db.del(req.key, encodingOptions, function (err) {
-          callback(req.id, err)
-        })
-      })
+    async function ondel (req) {
+      predel(req.key, function (err) { return callback(req.id, err) })
+      try {
+        await db.del(req.key, encodingOptions)
+        return callback(req.id, null)
+      } catch (err) {
+        return callback(req.id, err)
+      }
     }
 
     function onreadonly (req) {
       callback(req.id, new ModuleError('Database is readonly', { code: 'LEVEL_READONLY' }))
     }
 
-    function onbatch (req) {
-      prebatch(req.ops, function (err) {
-        if (err) return callback(req.id, err)
-
-        db.batch(req.ops, encodingOptions, function (err) {
-          callback(req.id, err)
-        })
-      })
+    async function onbatch (req) {
+      prebatch(req.key, function (err) { return callback(req.id, err) })
+      try {
+        await db.batch(req.ops, encodingOptions)
+        return callback(req.id, null)
+      } catch (err) {
+        return callback(req.id, err)
+      }
     }
 
     function oniterator ({ id, seq, options, consumed, bookmark, seek }) {
