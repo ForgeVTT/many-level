@@ -8,6 +8,7 @@
   "types": "./index.d.ts",
   "scripts": {
     "test": "standard && ts-standard *.ts && hallmark && (nyc -s tape test/*.js | faucet) && nyc report",
+    "test:stacktrace": "nyc -s tape test/*.js && nyc report",
     "coverage": "nyc report -r lcovonly",
     "hallmark": "hallmark --fix",
     "protobuf": "protocol-buffers schema.proto -o messages.js",
