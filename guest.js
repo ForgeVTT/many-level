@@ -213,26 +213,11 @@ class ManyLevelGuest extends AbstractLevel {
     }
   }
 
-  static _promiseFactory () {
-    let promiseResolve, promiseReject
-    const promise = new Promise((resolve, reject) => {
-      promiseResolve = resolve
-      promiseReject = reject
-    })
-    return {
-      promise,
-      callback: (err, value) => {
-        if (err) promiseReject(err)
-        else promiseResolve(value)
-      }
-    }
-  }
-
   async _get (key, opts) {
     // TODO: this and other methods assume db state matches our state
     if (this[kDb]) return this[kDb]._get(key, opts)
 
-    const { promise, callback } = ManyLevelGuest._promiseFactory()
+    const { promise, callback } = promiseFactory()
     const req = {
       tag: input.get,
       id: 0,
@@ -249,7 +234,7 @@ class ManyLevelGuest extends AbstractLevel {
   async _getMany (keys, opts) {
     if (this[kDb]) return this[kDb]._getMany(keys, opts)
 
-    const { promise, callback } = ManyLevelGuest._promiseFactory()
+    const { promise, callback } = promiseFactory()
     const req = {
       tag: input.getMany,
       id: 0,
@@ -266,7 +251,7 @@ class ManyLevelGuest extends AbstractLevel {
   async _put (key, value, opts) {
     if (this[kDb]) return this[kDb]._put(key, value, opts)
 
-    const { promise, callback } = ManyLevelGuest._promiseFactory()
+    const { promise, callback } = promiseFactory()
     const req = {
       tag: input.put,
       id: 0,
@@ -284,7 +269,7 @@ class ManyLevelGuest extends AbstractLevel {
   async _del (key, opts) {
     if (this[kDb]) return this[kDb]._del(key, opts)
 
-    const { promise, callback } = ManyLevelGuest._promiseFactory()
+    const { promise, callback } = promiseFactory()
     const req = {
       tag: input.del,
       id: 0,
@@ -301,7 +286,7 @@ class ManyLevelGuest extends AbstractLevel {
   async _batch (batch, opts) {
     if (this[kDb]) return this[kDb]._batch(batch, opts)
 
-    const { promise, callback } = ManyLevelGuest._promiseFactory()
+    const { promise, callback } = promiseFactory()
     const req = {
       tag: input.batch,
       id: 0,
@@ -318,7 +303,7 @@ class ManyLevelGuest extends AbstractLevel {
   async _clear (opts) {
     if (this[kDb]) return this[kDb]._clear(opts)
 
-    const { promise, callback } = ManyLevelGuest._promiseFactory()
+    const { promise, callback } = promiseFactory()
     const req = {
       tag: input.clear,
       id: 0,
@@ -507,6 +492,21 @@ class Iterator extends AbstractIterator {
     await this.db[kWrite]({ tag: input.iteratorClose, id: this[kRequest].id })
     this.db[kIterators].remove(this[kRequest].id)
     this.db[kFlushed]()
+  }
+}
+
+function promiseFactory () {
+  let promiseResolve, promiseReject
+  const promise = new Promise((resolve, reject) => {
+    promiseResolve = resolve
+    promiseReject = reject
+  })
+  return {
+    promise,
+    callback: (err, value) => {
+      if (err) promiseReject(err)
+      else promiseResolve(value)
+    }
   }
 }
 
