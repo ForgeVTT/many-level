@@ -373,13 +373,13 @@ class ManyLevelGuest extends AbstractLevel {
   }
 
   _iterator (options) {
-    return new Iterator(this, options)
+    return new ManyLevelGuestIterator(this, options)
   }
 }
 
 exports.ManyLevelGuest = ManyLevelGuest
 
-class Iterator extends AbstractIterator {
+class ManyLevelGuestIterator extends AbstractIterator {
   constructor (db, options) {
     // Need keys to know where to restart
     if (db[kRetry]) options.keys = true

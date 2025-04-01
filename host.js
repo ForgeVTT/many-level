@@ -185,7 +185,7 @@ function createRpcStream (db, options, streamOptions) {
     function oniterator ({ id, seq, options, consumed, bookmark, seek }) {
       if (iterators.has(id)) return
 
-      const it = new Iterator(db, id, seq, options, consumed, encode)
+      const it = new ManyLevelHostIterator(db, id, seq, options, consumed, encode)
       iterators.set(id, it)
 
       if (seek) {
@@ -229,7 +229,7 @@ function createRpcStream (db, options, streamOptions) {
   }
 }
 
-class Iterator {
+class ManyLevelHostIterator {
   constructor (db, id, seq, options, consumed, encode) {
     options = cleanRangeOptions(options)
 
