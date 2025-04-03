@@ -218,10 +218,13 @@ function createRpcStream (db, options, streamOptions) {
       if (it !== undefined) it.close()
     }
 
-    function onclear (req) {
-      db.clear(cleanRangeOptions(req.options), function (err) {
-        callback(req.id, err)
-      })
+    async function onclear (req) {
+      try {
+        await db.clear(cleanRangeOptions(req.options))
+        return callback(req.id, null)
+      } catch (err) {
+        return callback(req.id, err)
+      }
     }
   }
 }
