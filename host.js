@@ -23,7 +23,6 @@ const kBusy = Symbol('busy')
 const kPendingSeek = Symbol('pendingSeek')
 const kLimit = Symbol('limit')
 const kReadAhead = Symbol('readAhead')
-const noop = () => {}
 const limbo = Symbol('limbo')
 
 // TODO: make use of db.supports manifest
@@ -255,7 +254,7 @@ class ManyLevelHostIterator {
     this.pendingAcks = 0
   }
 
-  next (first) {
+  async next (first) {
     if (this[kBusy] || this[kClosed]) return
     if (this[kEnded] || this.pendingAcks > 1) return
 
@@ -279,7 +278,12 @@ class ManyLevelHostIterator {
     if (size <= 0) {
       process.nextTick(this[kHandleMany], null, [])
     } else {
-      this[kIterator].nextv(size, this[kHandleMany])
+      try {
+        const nextVal = await this[kIterator].nextv(size)
+        this[kHandleMany](null, nextVal)
+      } catch (err) {
+        this[kHandleMany](err, [])
+      }
     }
   }
 
@@ -351,10 +355,10 @@ class ManyLevelHostIterator {
     }
   }
 
-  close () {
+  async close () {
     if (this[kClosed]) return
     this[kClosed] = true
-    this[kIterator].close(noop)
+    await this[kIterator].close()
   }
 }
 

@@ -135,8 +135,7 @@ class ManyLevelGuest extends AbstractLevel {
       const req = self[kIterators].get(res.id)
       if (!req || req.iterator[kSeq] !== res.seq) return
       req.iterator[kPending].push(res)
-      // TODO: deprecate callbacks
-      if (req.iterator[kCallback]) req.iterator._next(req.iterator[kCallback])
+      if (req.iterator[kCallback]) req.iterator[kCallback](null, res)
     }
 
     function oniteratorend (res) {
@@ -144,8 +143,7 @@ class ManyLevelGuest extends AbstractLevel {
       if (!req || req.iterator[kSeq] !== res.seq) return
       // https://github.com/Level/abstract-level/issues/19
       req.iterator[kEnded] = true
-      // TODO: deprecate callbacks
-      if (req.iterator[kCallback]) req.iterator._next(req.iterator[kCallback])
+      if (req.iterator[kCallback]) req.iterator[kCallback](null, res)
     }
 
     function oncallback (res) {
@@ -390,6 +388,7 @@ class ManyLevelGuestIterator extends AbstractIterator {
     this[kEnded] = false
     this[kErrored] = false
     this[kPending] = []
+    this[kCallback] = null
     this[kSeq] = 0
 
     const req = this[kRequest] = {
@@ -442,50 +441,53 @@ class ManyLevelGuestIterator extends AbstractIterator {
   async _next () {
     if (this[kRequest].consumed >= this.limit || this[kErrored]) {
       return
-    } else if (this[kEnded]) {
-      return
-      // TODO: no more callbacks, verify what to do with this[kCallback]
-      // } else {
-      //   this[kCallback] = callback
     }
-    if (this[kPending].length !== 0) {
-      const next = this[kPending][0]
-      const req = this[kRequest]
-
-      // TODO: document that error ends the iterator
-      if (next.error) {
-        this[kErrored] = true
-        this[kPending] = []
-
-        throw new ModuleError('Could not read entry', {
-          code: next.error
-        })
-      }
-
-      const consumed = ++req.consumed
-      const key = req.options.keys ? next.data.shift() : undefined
-      const val = req.options.values ? next.data.shift() : undefined
-
-      if (next.data.length === 0) {
-        this[kPending].shift()
-
-        // Acknowledge receipt. Not needed if we don't want more data.
-        if (consumed < this.limit) {
-          this[kAckMessage].consumed = consumed
-          await this.db[kWrite](this[kAckMessage])
-        }
-      }
-
-      // Once we've consumed the result of a seek() it must not get retried
-      req.seek = null
-
-      if (this.db[kRetry]) {
-        req.bookmark = key
-      }
-
-      // TODO: is this the right return type??
-      return val
+    // If nothing is pending, wait for the host to send more data
+    if (!this[kPending].length) {
+      const { promise, callback } = promiseFactory()
+      this[kCallback] = callback
+      // oniteratordata (in ManyLevelGuest) will use the callback to resolve
+      // this promise to the data received from the host.
+      await promise
+      // This could have ended the iterator
+      if (this[kEnded] && !this[kPending].length) return
     }
+    const next = this[kPending][0]
+    const req = this[kRequest]
+
+    // TODO: document that error ends the iterator
+    if (next.error) {
+      this[kErrored] = true
+      this[kPending] = []
+
+      throw new ModuleError('Could not read entry', {
+        code: next.error
+      })
+    }
+
+    const consumed = ++req.consumed
+    const key = req.options.keys ? next.data.shift() : undefined
+    const val = req.options.values ? next.data.shift() : undefined
+
+    if (next.data.length === 0) {
+      this[kPending].shift()
+
+      // Acknowledge receipt. Not needed if we don't want more data.
+      if (consumed < this.limit) {
+        this[kAckMessage].consumed = consumed
+        this.db[kWrite](this[kAckMessage])
+      }
+    }
+
+    // Once we've consumed the result of a seek() it must not get retried
+    req.seek = null
+
+    if (this.db[kRetry]) {
+      req.bookmark = key
+    }
+    if (req.options.keys && req.options.values) return [key, val]
+    if (req.options.keys) return key
+    if (req.options.values) return val
   }
 
   async _close () {
