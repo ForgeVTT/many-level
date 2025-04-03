@@ -443,6 +443,8 @@ class ManyLevelGuestIterator extends AbstractIterator {
       return
     }
     // If nothing is pending, wait for the host to send more data
+    // TODO: except if this[kEnded] is true and nothing is pending, then
+    //   don't wait! Return undefined.
     if (!this[kPending].length) {
       const { promise, callback } = promiseFactory()
       this[kCallback] = callback
@@ -466,6 +468,8 @@ class ManyLevelGuestIterator extends AbstractIterator {
     }
 
     const consumed = ++req.consumed
+    // TODO: might need to add `.toString()` to the key and value to convert from Buffer
+    // Depends on whether abstract level does that itself or not.
     const key = req.options.keys ? next.data.shift() : undefined
     const val = req.options.values ? next.data.shift() : undefined
 
