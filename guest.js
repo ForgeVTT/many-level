@@ -445,21 +445,21 @@ class ManyLevelGuestIterator extends AbstractIterator {
     // If nothing is pending, wait for the host to send more data
     // TODO: except if this[kEnded] is true and nothing is pending, then
     //   don't wait! Return undefined.
-    if (!this[kPending].length) {
+    if (!this[kEnded] && !this[kPending].length) {
       const { promise, callback } = promiseFactory()
       this[kCallback] = callback
       // oniteratordata (in ManyLevelGuest) will use the callback to resolve
       // this promise to the data received from the host.
       await promise
-      // This could have ended the iterator
-      if (this[kEnded] && !this[kPending].length) return
     }
     const next = this[kPending][0]
     const req = this[kRequest]
 
-    // TODO: document that error ends the iterator
+    // If the host iterator has ended and we have no pending data, we are done.
+    if (!next && this[kEnded]) return
     if (next.error) {
       this[kErrored] = true
+      this[kEnded] = true
       this[kPending] = []
 
       throw new ModuleError('Could not read entry', {
@@ -468,8 +468,6 @@ class ManyLevelGuestIterator extends AbstractIterator {
     }
 
     const consumed = ++req.consumed
-    // TODO: might need to add `.toString()` to the key and value to convert from Buffer
-    // Depends on whether abstract level does that itself or not.
     const key = req.options.keys ? next.data.shift() : undefined
     const val = req.options.values ? next.data.shift() : undefined
 
@@ -489,9 +487,7 @@ class ManyLevelGuestIterator extends AbstractIterator {
     if (this.db[kRetry]) {
       req.bookmark = key
     }
-    if (req.options.keys && req.options.values) return [key, val]
-    if (req.options.keys) return key
-    if (req.options.values) return val
+    return [key, val]
   }
 
   async _close () {
