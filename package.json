@@ -57,7 +57,7 @@
   },
   "homepage": "https://github.com/Level/many-level",
   "engines": {
-    "node": ">=12"
+    "node": ">=16"
   },
   "standard": {
     "ignore": [
