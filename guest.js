@@ -215,104 +215,122 @@ class ManyLevelGuest extends AbstractLevel {
     // TODO: this and other methods assume db state matches our state
     if (this[kDb]) return this[kDb]._get(key, opts)
 
-    const { promise, callback } = promiseFactory()
-    const req = {
-      tag: input.get,
-      id: 0,
-      key: key,
-      callback
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.get,
+        id: 0,
+        key: key,
+        // This will resolve or reject based on the Host's response
+        callback: (err, value) => {
+          if (err) reject(err)
+          else resolve(value)
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
-    // This should resolve or reject based on the Host's response
-    return promise
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
   async _getMany (keys, opts) {
     if (this[kDb]) return this[kDb]._getMany(keys, opts)
 
-    const { promise, callback } = promiseFactory()
-    const req = {
-      tag: input.getMany,
-      id: 0,
-      keys: keys,
-      callback
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.getMany,
+        id: 0,
+        keys: keys,
+        // This will resolve or reject based on the Host's response
+        callback: (err, values) => {
+          if (err) reject(err)
+          else resolve(values)
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
-    // This should resolve or reject based on the Host's response
-    return promise
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
   async _put (key, value, opts) {
     if (this[kDb]) return this[kDb]._put(key, value, opts)
 
-    const { promise, callback } = promiseFactory()
-    const req = {
-      tag: input.put,
-      id: 0,
-      key: key,
-      value: value,
-      callback
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.put,
+        id: 0,
+        key: key,
+        value: value,
+        // This will resolve or reject based on the Host's response
+        callback: (err) => {
+          if (err) reject(err)
+          else resolve()
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
-    // This should resolve or reject based on the Host's response
-    return promise
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
   async _del (key, opts) {
     if (this[kDb]) return this[kDb]._del(key, opts)
 
-    const { promise, callback } = promiseFactory()
-    const req = {
-      tag: input.del,
-      id: 0,
-      key: key,
-      callback
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.del,
+        id: 0,
+        key: key,
+        // This will resolve or reject based on the Host's response
+        callback: (err) => {
+          if (err) reject(err)
+          else resolve()
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
-    // This should resolve or reject based on the Host's response
-    return promise
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
   async _batch (batch, opts) {
     if (this[kDb]) return this[kDb]._batch(batch, opts)
 
-    const { promise, callback } = promiseFactory()
-    const req = {
-      tag: input.batch,
-      id: 0,
-      ops: batch,
-      callback
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.batch,
+        id: 0,
+        ops: batch,
+        // This will resolve or reject based on the Host's response
+        callback: (err) => {
+          if (err) reject(err)
+          else resolve()
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
-    // This should resolve or reject based on the Host's response
-    return promise
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
   async _clear (opts) {
     if (this[kDb]) return this[kDb]._clear(opts)
 
-    const { promise, callback } = promiseFactory()
-    const req = {
-      tag: input.clear,
-      id: 0,
-      options: opts,
-      callback
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.clear,
+        id: 0,
+        options: opts,
+        // This will resolve or reject based on the Host's response
+        callback: (err) => {
+          if (err) reject(err)
+          else resolve()
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
-    // This should resolve or reject based on the Host's response
-    return promise
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
   async [kWrite] (req) {
@@ -445,12 +463,18 @@ class ManyLevelGuestIterator extends AbstractIterator {
     // If nothing is pending, wait for the host to send more data
     // TODO: except if this[kEnded] is true and nothing is pending, then
     //   don't wait! Return undefined.
-    if (!this[kEnded] && !this[kPending].length) {
-      const { promise, callback } = promiseFactory()
-      this[kCallback] = callback
-      // oniteratordata (in ManyLevelGuest) will use the callback to resolve
-      // this promise to the data received from the host.
-      await promise
+    if (this[kEnded] && !this[kPending].length) {
+      return undefined
+    }
+    // oniteratordata (in ManyLevelGuest) will use the callback to resolve
+    // this promise to the data received from the host.
+    if (!this[kPending].length) {
+      await new Promise((resolve, reject) => {
+        this[kCallback] = (err, data) => {
+          if (err) reject(err)
+          else resolve(data)
+        }
+      })
     }
     const next = this[kPending][0]
     const req = this[kRequest]
@@ -477,7 +501,7 @@ class ManyLevelGuestIterator extends AbstractIterator {
       // Acknowledge receipt. Not needed if we don't want more data.
       if (consumed < this.limit) {
         this[kAckMessage].consumed = consumed
-        this.db[kWrite](this[kAckMessage])
+        await this.db[kWrite](this[kAckMessage])
       }
     }
 
@@ -494,21 +518,6 @@ class ManyLevelGuestIterator extends AbstractIterator {
     await this.db[kWrite]({ tag: input.iteratorClose, id: this[kRequest].id })
     this.db[kIterators].remove(this[kRequest].id)
     this.db[kFlushed]()
-  }
-}
-
-function promiseFactory () {
-  let promiseResolve, promiseReject
-  const promise = new Promise((resolve, reject) => {
-    promiseResolve = resolve
-    promiseReject = reject
-  })
-  return {
-    promise,
-    callback: (err, value) => {
-      if (err) promiseReject(err)
-      else promiseResolve(value)
-    }
   }
 }
 
