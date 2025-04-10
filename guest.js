@@ -4,12 +4,14 @@ const { AbstractLevel, AbstractIterator } = require('abstract-level')
 const lpstream = require('@vweevers/length-prefixed-stream')
 const ModuleError = require('module-error')
 const { input, output } = require('./tags')
-const { Duplex, pipeline, finished } = require('readable-stream')
+const { promises: readablePromises, Duplex } = require('readable-stream')
+const { pipeline, finished } = readablePromises
 
 const kExplicitClose = Symbol('explicitClose')
 const kAbortRequests = Symbol('abortRequests')
 const kEnded = Symbol('kEnded')
 const kRemote = Symbol('remote')
+const kCleanup = Symbol('cleanup')
 const kAckMessage = Symbol('ackMessage')
 const kEncode = Symbol('encode')
 const kRef = Symbol('ref')
@@ -45,6 +47,7 @@ class ManyLevelGuest extends AbstractLevel {
     this[kRetry] = !!retry
     this[kEncode] = lpstream.encode()
     this[kRemote] = _remote || null
+    this[kCleanup] = null
     this[kRpcStream] = null
     this[kRef] = null
     this[kDb] = null
@@ -108,12 +111,15 @@ class ManyLevelGuest extends AbstractLevel {
     })
 
     const proxy = Duplex.from({ writable: decode, readable: encode })
-    finished(proxy, cleanup)
-    this[kRpcStream] = proxy
-    return proxy
-
-    function cleanup () {
+    self[kCleanup] = (async () => {
+      await finished(proxy).catch(err => {
+        // Abort error is expected on close, which is what triggers finished
+        if (err.code !== 'ABORT_ERR') {
+          throw err
+        }
+      })
       self[kRpcStream] = null
+      // Create a dummy stream to flush pending requests to
       self[kEncode] = lpstream.encode()
 
       if (!self[kRetry]) {
@@ -123,13 +129,15 @@ class ManyLevelGuest extends AbstractLevel {
       }
 
       for (const req of self[kRequests].values()) {
-        self[kWrite](req)
+        await self[kWrite](req)
       }
 
       for (const req of self[kIterators].values()) {
-        self[kWrite](req)
+        await self[kWrite](req)
       }
-    }
+    })()
+    self[kRpcStream] = proxy
+    return proxy
 
     function oniteratordata (res) {
       const req = self[kIterators].get(res.id)
@@ -348,13 +356,25 @@ class ManyLevelGuest extends AbstractLevel {
     this[kAbortRequests]('Aborted on database close()', 'LEVEL_DATABASE_NOT_OPEN')
 
     if (this[kRpcStream]) {
-      // TODO: need to do something with finished. Can we use readable-stream.promises or whatever?? That would make life much easier...
-      finished(this[kRpcStream], () => {
-        this[kRpcStream] = null
-        this._close()
+      try {
+        this[kRpcStream].destroy()
+      } catch (err) {
+        // Abort error is expected on close
+        if (err.code !== 'ABORT_ERR') {
+          throw err
+        }
+      }
+      await finished(this[kRpcStream]).catch(err => {
+        // Abort error is expected on close
+        if (err.code !== 'ABORT_ERR') {
+          throw err
+        }
       })
-      this[kRpcStream].destroy()
-    } else if (this[kDb]) {
+      if (this[kCleanup]) await this[kCleanup]
+      this[kRpcStream] = null
+      this[kCleanup] = null
+    }
+    if (this[kDb]) {
       // To be safe, use close() not _close().
       return this[kDb].close()
     }
@@ -365,13 +385,16 @@ class ManyLevelGuest extends AbstractLevel {
       // For tests only so does not need error handling
       this[kExplicitClose] = false
       const remote = this[kRemote]()
-      // TODO: Need to promisify pipeline
       pipeline(
         remote,
         this.connect(),
-        remote,
-        () => {}
-      )
+        remote
+      ).catch(err => {
+        // TODO: proper abort handling
+        if (err.code === 'ABORT_ERR') {
+          return this.close()
+        }
+      })
     } else if (this[kExplicitClose]) {
       throw new ModuleError('Cannot reopen many-level database after close()', {
         code: 'LEVEL_NOT_SUPPORTED'
