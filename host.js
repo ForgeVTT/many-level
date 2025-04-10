@@ -2,7 +2,8 @@
 
 const lpstream = require('@vweevers/length-prefixed-stream')
 const ModuleError = require('module-error')
-const { Duplex, finished } = require('readable-stream')
+const { Duplex, promises: readablePromises } = require('readable-stream')
+const { finished } = readablePromises
 const { input, output } = require('./tags')
 
 const rangeOptions = new Set(['gt', 'gte', 'lt', 'lte'])
@@ -83,13 +84,21 @@ function createRpcStream (db, options, streamOptions) {
 
     const iterators = new Map()
 
-    finished(stream, function () {
+    const cleanup = async () => {
+      await finished(stream).catch(err => {
+        // Abort error is expected on close, which is what triggers finished
+        if (err.code !== 'ABORT_ERR') {
+          throw err
+        }
+      })
       for (const iterator of iterators.values()) {
         iterator.close()
       }
 
       iterators.clear()
-    })
+    }
+    // Don't await
+    cleanup()
 
     decode.on('data', function (data) {
       if (!data.length) return
