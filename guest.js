@@ -376,7 +376,7 @@ class ManyLevelGuest extends AbstractLevel {
       const remote = this[kRemote]()
       pipeline(
         remote,
-        this.connect(),
+        this.createRpcStream(),
         remote
       ).catch(err => {
         // TODO: proper abort handling
