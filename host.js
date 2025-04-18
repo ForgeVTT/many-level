@@ -85,12 +85,7 @@ function createRpcStream (db, options, streamOptions) {
     const iterators = new Map()
 
     const cleanup = async () => {
-      await finished(stream).catch(err => {
-        // Abort error is expected on close, which is what triggers finished
-        if (err.code !== 'ABORT_ERR') {
-          throw err
-        }
-      })
+      await finished(stream).catch(() => null)
       for (const iterator of iterators.values()) {
         iterator.close()
       }

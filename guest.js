@@ -114,8 +114,8 @@ class ManyLevelGuest extends AbstractLevel {
     self[kCleanup] = (async () => {
       await finished(proxy).catch(err => {
         // Abort error is expected on close, which is what triggers finished
-        if (err.code !== 'ABORT_ERR') {
-          throw err
+        if (err.code === 'ABORT_ERR') {
+          // TODO: abort in-flight ops
         }
       })
       self[kRpcStream] = null
@@ -356,20 +356,9 @@ class ManyLevelGuest extends AbstractLevel {
     this[kAbortRequests]('Aborted on database close()', 'LEVEL_DATABASE_NOT_OPEN')
 
     if (this[kRpcStream]) {
-      try {
-        this[kRpcStream].destroy()
-      } catch (err) {
-        // Abort error is expected on close
-        if (err.code !== 'ABORT_ERR') {
-          throw err
-        }
-      }
-      await finished(this[kRpcStream]).catch(err => {
-        // Abort error is expected on close
-        if (err.code !== 'ABORT_ERR') {
-          throw err
-        }
-      })
+      const finishedPromise = finished(this[kRpcStream]).catch(() => null)
+      this[kRpcStream].destroy().catch(() => null)
+      await finishedPromise
       if (this[kCleanup]) await this[kCleanup]
       this[kRpcStream] = null
       this[kCleanup] = null
