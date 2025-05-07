@@ -203,10 +203,9 @@ class ManyLevelGuest extends AbstractLevel {
       req.callback(new ModuleError(msg, { code }))
     }
 
-    // TODO: iterators
     for (const req of this[kIterators].clear()) {
       // Cancel in-flight operation if any
-      // TODO: do we need a new mechanism to pass the error back up to the request initiator?
+      // TODO: does this need to be refactored to use AbortError to pass back up to the request initiator?
       const callback = req.iterator[kCallback]
       req.iterator[kCallback] = null
 
@@ -379,7 +378,6 @@ class ManyLevelGuest extends AbstractLevel {
         this.createRpcStream(),
         remote
       ).catch(err => {
-        // TODO: proper abort handling
         if (err.code === 'ABORT_ERR') {
           return this.close()
         }
@@ -473,7 +471,7 @@ class ManyLevelGuestIterator extends AbstractIterator {
       return
     }
     // If nothing is pending, wait for the host to send more data
-    // TODO: except if this[kEnded] is true and nothing is pending, then
+    // except if this[kEnded] is true and nothing is pending, then
     //   don't wait! Return undefined.
     if (this[kEnded] && !this[kPending].length) {
       return undefined
