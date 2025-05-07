@@ -8,6 +8,7 @@
   "types": "./index.d.ts",
   "scripts": {
     "test": "standard && ts-standard *.ts && hallmark && (nyc -s tape test/*.js | faucet) && nyc report",
+    "test:stacktrace": "nyc -s tape test/*.js && nyc report",
     "coverage": "nyc report -r lcovonly",
     "hallmark": "hallmark --fix",
     "protobuf": "protocol-buffers schema.proto -o messages.js",
@@ -26,7 +27,7 @@
   ],
   "dependencies": {
     "@vweevers/length-prefixed-stream": "^1.0.0",
-    "abstract-level": "^1.0.3",
+    "abstract-level": "^2.0.2",
     "module-error": "^1.0.2",
     "protocol-buffers-encodings": "^1.1.0",
     "readable-stream": "^4.0.0"
@@ -39,7 +40,7 @@
     "faucet": "^0.0.3",
     "hallmark": "^4.0.0",
     "level-read-stream": "^1.1.0",
-    "memory-level": "^1.0.0",
+    "memory-level": "^2.0.0",
     "nyc": "^15.1.0",
     "protocol-buffers": "^5.0.0",
     "standard": "^16.0.3",
@@ -56,7 +57,7 @@
   },
   "homepage": "https://github.com/Level/many-level",
   "engines": {
-    "node": ">=12"
+    "node": ">=16"
   },
   "standard": {
     "ignore": [

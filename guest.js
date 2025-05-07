@@ -4,12 +4,14 @@ const { AbstractLevel, AbstractIterator } = require('abstract-level')
 const lpstream = require('@vweevers/length-prefixed-stream')
 const ModuleError = require('module-error')
 const { input, output } = require('./tags')
-const { Duplex, pipeline, finished } = require('readable-stream')
+const { promises: readablePromises, Duplex } = require('readable-stream')
+const { pipeline, finished } = readablePromises
 
 const kExplicitClose = Symbol('explicitClose')
 const kAbortRequests = Symbol('abortRequests')
 const kEnded = Symbol('kEnded')
 const kRemote = Symbol('remote')
+const kCleanup = Symbol('cleanup')
 const kAckMessage = Symbol('ackMessage')
 const kEncode = Symbol('encode')
 const kRef = Symbol('ref')
@@ -45,6 +47,7 @@ class ManyLevelGuest extends AbstractLevel {
     this[kRetry] = !!retry
     this[kEncode] = lpstream.encode()
     this[kRemote] = _remote || null
+    this[kCleanup] = null
     this[kRpcStream] = null
     this[kRef] = null
     this[kDb] = null
@@ -108,12 +111,15 @@ class ManyLevelGuest extends AbstractLevel {
     })
 
     const proxy = Duplex.from({ writable: decode, readable: encode })
-    finished(proxy, cleanup)
-    this[kRpcStream] = proxy
-    return proxy
-
-    function cleanup () {
+    self[kCleanup] = (async () => {
+      await finished(proxy).catch(err => {
+        // Abort error is expected on close, which is what triggers finished
+        if (err.code === 'ABORT_ERR') {
+          // TODO: abort in-flight ops
+        }
+      })
       self[kRpcStream] = null
+      // Create a dummy stream to flush pending requests to
       self[kEncode] = lpstream.encode()
 
       if (!self[kRetry]) {
@@ -123,19 +129,21 @@ class ManyLevelGuest extends AbstractLevel {
       }
 
       for (const req of self[kRequests].values()) {
-        self[kWrite](req)
+        await self[kWrite](req)
       }
 
       for (const req of self[kIterators].values()) {
-        self[kWrite](req)
+        await self[kWrite](req)
       }
-    }
+    })()
+    self[kRpcStream] = proxy
+    return proxy
 
     function oniteratordata (res) {
       const req = self[kIterators].get(res.id)
       if (!req || req.iterator[kSeq] !== res.seq) return
       req.iterator[kPending].push(res)
-      if (req.iterator[kCallback]) req.iterator._next(req.iterator[kCallback])
+      if (req.iterator[kCallback]) req.iterator[kCallback](null, res)
     }
 
     function oniteratorend (res) {
@@ -143,19 +151,19 @@ class ManyLevelGuest extends AbstractLevel {
       if (!req || req.iterator[kSeq] !== res.seq) return
       // https://github.com/Level/abstract-level/issues/19
       req.iterator[kEnded] = true
-      if (req.iterator[kCallback]) req.iterator._next(req.iterator[kCallback])
+      if (req.iterator[kCallback]) req.iterator[kCallback](null, res)
     }
 
     function oncallback (res) {
       const req = self[kRequests].remove(res.id)
-      if (!req) return
+      if (!req || !req.callback) return
       if (res.error) req.callback(new ModuleError('Could not get value', { code: res.error }))
       else req.callback(null, normalizeValue(res.value))
     }
 
     function ongetmanycallback (res) {
       const req = self[kRequests].remove(res.id)
-      if (!req) return
+      if (!req || !req.callback) return
       if (res.error) req.callback(new ModuleError('Could not get values', { code: res.error }))
       else req.callback(null, res.values.map(v => normalizeValue(v.value)))
     }
@@ -191,11 +199,13 @@ class ManyLevelGuest extends AbstractLevel {
 
   [kAbortRequests] (msg, code) {
     for (const req of this[kRequests].clear()) {
+      // TODO: this doesn't actually abort the request, but neither did the old way
       req.callback(new ModuleError(msg, { code }))
     }
 
     for (const req of this[kIterators].clear()) {
       // Cancel in-flight operation if any
+      // TODO: does this need to be refactored to use AbortError to pass back up to the request initiator?
       const callback = req.iterator[kCallback]
       req.iterator[kCallback] = null
 
@@ -208,138 +218,175 @@ class ManyLevelGuest extends AbstractLevel {
     }
   }
 
-  _get (key, opts, cb) {
+  async _get (key, opts) {
     // TODO: this and other methods assume db state matches our state
-    if (this[kDb]) return this[kDb]._get(key, opts, cb)
+    if (this[kDb]) return this[kDb]._get(key, opts)
 
-    const req = {
-      tag: input.get,
-      id: 0,
-      key: key,
-      callback: cb
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.get,
+        id: 0,
+        key: key,
+        // This will resolve or reject based on the Host's response
+        callback: (err, value) => {
+          if (err) reject(err)
+          else resolve(value)
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
-  _getMany (keys, opts, cb) {
-    if (this[kDb]) return this[kDb]._getMany(keys, opts, cb)
+  async _getMany (keys, opts) {
+    if (this[kDb]) return this[kDb]._getMany(keys, opts)
 
-    const req = {
-      tag: input.getMany,
-      id: 0,
-      keys: keys,
-      callback: cb
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.getMany,
+        id: 0,
+        keys: keys,
+        // This will resolve or reject based on the Host's response
+        callback: (err, values) => {
+          if (err) reject(err)
+          else resolve(values)
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
-  _put (key, value, opts, cb) {
-    if (this[kDb]) return this[kDb]._put(key, value, opts, cb)
+  async _put (key, value, opts) {
+    if (this[kDb]) return this[kDb]._put(key, value, opts)
 
-    const req = {
-      tag: input.put,
-      id: 0,
-      key: key,
-      value: value,
-      callback: cb
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.put,
+        id: 0,
+        key: key,
+        value: value,
+        // This will resolve or reject based on the Host's response
+        callback: (err) => {
+          if (err) reject(err)
+          else resolve()
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
-  _del (key, opts, cb) {
-    if (this[kDb]) return this[kDb]._del(key, opts, cb)
+  async _del (key, opts) {
+    if (this[kDb]) return this[kDb]._del(key, opts)
 
-    const req = {
-      tag: input.del,
-      id: 0,
-      key: key,
-      callback: cb
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.del,
+        id: 0,
+        key: key,
+        // This will resolve or reject based on the Host's response
+        callback: (err) => {
+          if (err) reject(err)
+          else resolve()
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
-  _batch (batch, opts, cb) {
-    if (this[kDb]) return this[kDb]._batch(batch, opts, cb)
+  async _batch (batch, opts) {
+    if (this[kDb]) return this[kDb]._batch(batch, opts)
 
-    const req = {
-      tag: input.batch,
-      id: 0,
-      ops: batch,
-      callback: cb
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.batch,
+        id: 0,
+        ops: batch,
+        // This will resolve or reject based on the Host's response
+        callback: (err) => {
+          if (err) reject(err)
+          else resolve()
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
-  _clear (opts, cb) {
-    if (this[kDb]) return this[kDb]._clear(opts, cb)
+  async _clear (opts) {
+    if (this[kDb]) return this[kDb]._clear(opts)
 
-    const req = {
-      tag: input.clear,
-      id: 0,
-      options: opts,
-      callback: cb
-    }
+    return new Promise((resolve, reject) => {
+      const req = {
+        tag: input.clear,
+        id: 0,
+        options: opts,
+        // This will resolve or reject based on the Host's response
+        callback: (err) => {
+          if (err) reject(err)
+          else resolve()
+        }
+      }
 
-    req.id = this[kRequests].add(req)
-    this[kWrite](req)
+      req.id = this[kRequests].add(req)
+      this[kWrite](req)
+    })
   }
 
-  [kWrite] (req) {
+  async [kWrite] (req) {
     if (this[kRequests].size + this[kIterators].size === 1) ref(this[kRef])
     const enc = input.encoding(req.tag)
     const buf = Buffer.allocUnsafe(enc.encodingLength(req) + 1)
     buf[0] = req.tag
     enc.encode(req, buf, 1)
-    this[kEncode].write(buf)
+    return this[kEncode].write(buf)
   }
 
-  _close (cb) {
+  async _close () {
     // Even if forward() was used, still need to abort requests made before forward().
     this[kExplicitClose] = true
     this[kAbortRequests]('Aborted on database close()', 'LEVEL_DATABASE_NOT_OPEN')
 
     if (this[kRpcStream]) {
-      finished(this[kRpcStream], () => {
-        this[kRpcStream] = null
-        this._close(cb)
-      })
-      this[kRpcStream].destroy()
-    } else if (this[kDb]) {
+      const finishedPromise = finished(this[kRpcStream]).catch(() => null)
+      this[kRpcStream].destroy().catch(() => null)
+      await finishedPromise
+      if (this[kCleanup]) await this[kCleanup]
+      this[kRpcStream] = null
+      this[kCleanup] = null
+    }
+    if (this[kDb]) {
       // To be safe, use close() not _close().
-      this[kDb].close(cb)
-    } else {
-      this.nextTick(cb)
+      return this[kDb].close()
     }
   }
 
-  _open (options, cb) {
+  async _open (options) {
     if (this[kRemote]) {
       // For tests only so does not need error handling
       this[kExplicitClose] = false
       const remote = this[kRemote]()
       pipeline(
         remote,
-        this.connect(),
-        remote,
-        () => {}
-      )
+        this.createRpcStream(),
+        remote
+      ).catch(err => {
+        if (err.code === 'ABORT_ERR') {
+          return this.close()
+        }
+      })
     } else if (this[kExplicitClose]) {
       throw new ModuleError('Cannot reopen many-level database after close()', {
         code: 'LEVEL_NOT_SUPPORTED'
       })
     }
-
-    this.nextTick(cb)
   }
 
   iterator (options) {
@@ -352,13 +399,13 @@ class ManyLevelGuest extends AbstractLevel {
   }
 
   _iterator (options) {
-    return new Iterator(this, options)
+    return new ManyLevelGuestIterator(this, options)
   }
 }
 
 exports.ManyLevelGuest = ManyLevelGuest
 
-class Iterator extends AbstractIterator {
+class ManyLevelGuestIterator extends AbstractIterator {
   constructor (db, options) {
     // Need keys to know where to restart
     if (db[kRetry]) options.keys = true
@@ -419,59 +466,68 @@ class Iterator extends AbstractIterator {
   }
 
   // TODO: implement optimized `nextv()`
-  _next (callback) {
-    this[kCallback] = null
-
+  async _next () {
     if (this[kRequest].consumed >= this.limit || this[kErrored]) {
-      this.nextTick(callback)
-    } else if (this[kPending].length !== 0) {
-      const next = this[kPending][0]
-      const req = this[kRequest]
-
-      // TODO: document that error ends the iterator
-      if (next.error) {
-        this[kErrored] = true
-        this[kPending] = []
-
-        return this.nextTick(callback, new ModuleError('Could not read entry', {
-          code: next.error
-        }))
-      }
-
-      const consumed = ++req.consumed
-      const key = req.options.keys ? next.data.shift() : undefined
-      const val = req.options.values ? next.data.shift() : undefined
-
-      if (next.data.length === 0) {
-        this[kPending].shift()
-
-        // Acknowledge receipt. Not needed if we don't want more data.
-        if (consumed < this.limit) {
-          this[kAckMessage].consumed = consumed
-          this.db[kWrite](this[kAckMessage])
-        }
-      }
-
-      // Once we've consumed the result of a seek() it must not get retried
-      req.seek = null
-
-      if (this.db[kRetry]) {
-        req.bookmark = key
-      }
-
-      this.nextTick(callback, undefined, key, val)
-    } else if (this[kEnded]) {
-      this.nextTick(callback)
-    } else {
-      this[kCallback] = callback
+      return
     }
+    // If nothing is pending, wait for the host to send more data
+    // except if this[kEnded] is true and nothing is pending, then
+    //   don't wait! Return undefined.
+    if (this[kEnded] && !this[kPending].length) {
+      return undefined
+    }
+    // oniteratordata (in ManyLevelGuest) will use the callback to resolve
+    // this promise to the data received from the host.
+    if (!this[kPending].length) {
+      await new Promise((resolve, reject) => {
+        this[kCallback] = (err, data) => {
+          if (err) reject(err)
+          else resolve(data)
+        }
+      })
+    }
+    const next = this[kPending][0]
+    const req = this[kRequest]
+
+    // If the host iterator has ended and we have no pending data, we are done.
+    if (!next && this[kEnded]) return
+    if (next.error) {
+      this[kErrored] = true
+      this[kEnded] = true
+      this[kPending] = []
+
+      throw new ModuleError('Could not read entry', {
+        code: next.error
+      })
+    }
+
+    const consumed = ++req.consumed
+    const key = req.options.keys ? next.data.shift() : undefined
+    const val = req.options.values ? next.data.shift() : undefined
+
+    if (next.data.length === 0) {
+      this[kPending].shift()
+
+      // Acknowledge receipt. Not needed if we don't want more data.
+      if (consumed < this.limit) {
+        this[kAckMessage].consumed = consumed
+        await this.db[kWrite](this[kAckMessage])
+      }
+    }
+
+    // Once we've consumed the result of a seek() it must not get retried
+    req.seek = null
+
+    if (this.db[kRetry]) {
+      req.bookmark = key
+    }
+    return [key, val]
   }
 
-  _close (cb) {
-    this.db[kWrite]({ tag: input.iteratorClose, id: this[kRequest].id })
+  async _close () {
+    await this.db[kWrite]({ tag: input.iteratorClose, id: this[kRequest].id })
     this.db[kIterators].remove(this[kRequest].id)
     this.db[kFlushed]()
-    this.nextTick(cb)
   }
 }
 

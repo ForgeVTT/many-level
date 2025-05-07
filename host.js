@@ -2,7 +2,8 @@
 
 const lpstream = require('@vweevers/length-prefixed-stream')
 const ModuleError = require('module-error')
-const { Duplex, finished } = require('readable-stream')
+const { Duplex, promises: readablePromises } = require('readable-stream')
+const { finished } = readablePromises
 const { input, output } = require('./tags')
 
 const rangeOptions = new Set(['gt', 'gte', 'lt', 'lte'])
@@ -23,7 +24,6 @@ const kBusy = Symbol('busy')
 const kPendingSeek = Symbol('pendingSeek')
 const kLimit = Symbol('limit')
 const kReadAhead = Symbol('readAhead')
-const noop = () => {}
 const limbo = Symbol('limbo')
 
 // TODO: make use of db.supports manifest
@@ -65,7 +65,7 @@ function createRpcStream (db, options, streamOptions) {
   const predel = options.predel
   const prebatch = options.prebatch
 
-  db.open({ passive: true }, ready)
+  db.open({ passive: true }).then(() => ready()).catch(ready)
 
   // TODO: send events to guest. Challenges:
   // - Need to know encodings or emit encoded data; current abstract-level events don't suffice
@@ -84,13 +84,16 @@ function createRpcStream (db, options, streamOptions) {
 
     const iterators = new Map()
 
-    finished(stream, function () {
+    const cleanup = async () => {
+      await finished(stream).catch(() => null)
       for (const iterator of iterators.values()) {
         iterator.close()
       }
 
       iterators.clear()
-    })
+    }
+    // Don't await
+    cleanup()
 
     decode.on('data', function (data) {
       if (!data.length) return
@@ -131,54 +134,61 @@ function createRpcStream (db, options, streamOptions) {
       encode.write(encodeMessage(msg, output.getManyCallback))
     }
 
-    function onput (req) {
-      preput(req.key, req.value, function (err) {
-        if (err) return callback(req.id, err)
-        db.put(req.key, req.value, encodingOptions, function (err) {
-          callback(req.id, err, null)
-        })
-      })
+    async function onput (req) {
+      preput(req.key, req.value, function (err) { return callback(req.id, err) })
+      try {
+        await db.put(req.key, req.value, encodingOptions)
+      } catch (err) {
+        return callback(req.id, err, null)
+      }
     }
 
-    function onget (req) {
-      db.get(req.key, encodingOptions, function (err, value) {
-        callback(req.id, err, value)
-      })
+    async function onget (req) {
+      try {
+        const value = await db.get(req.key, encodingOptions)
+        return callback(req.id, null, value)
+      } catch (err) {
+        return callback(req.id, err, null)
+      }
     }
 
-    function ongetmany (req) {
-      db.getMany(req.keys, encodingOptions, function (err, values) {
-        getManyCallback(req.id, err, values.map(value => ({ value })))
-      })
+    async function ongetmany (req) {
+      try {
+        const values = await db.getMany(req.keys, encodingOptions)
+        return getManyCallback(req.id, null, values.map(value => ({ value })))
+      } catch (err) {
+        return getManyCallback(req.id, err, [])
+      }
     }
 
-    function ondel (req) {
-      predel(req.key, function (err) {
-        if (err) return callback(req.id, err)
-        db.del(req.key, encodingOptions, function (err) {
-          callback(req.id, err)
-        })
-      })
+    async function ondel (req) {
+      predel(req.key, function (err) { return callback(req.id, err) })
+      try {
+        await db.del(req.key, encodingOptions)
+        return callback(req.id, null)
+      } catch (err) {
+        return callback(req.id, err)
+      }
     }
 
     function onreadonly (req) {
       callback(req.id, new ModuleError('Database is readonly', { code: 'LEVEL_READONLY' }))
     }
 
-    function onbatch (req) {
-      prebatch(req.ops, function (err) {
-        if (err) return callback(req.id, err)
-
-        db.batch(req.ops, encodingOptions, function (err) {
-          callback(req.id, err)
-        })
-      })
+    async function onbatch (req) {
+      prebatch(req.key, function (err) { return callback(req.id, err) })
+      try {
+        await db.batch(req.ops, encodingOptions)
+        return callback(req.id, null)
+      } catch (err) {
+        return callback(req.id, err)
+      }
     }
 
     function oniterator ({ id, seq, options, consumed, bookmark, seek }) {
       if (iterators.has(id)) return
 
-      const it = new Iterator(db, id, seq, options, consumed, encode)
+      const it = new ManyLevelHostIterator(db, id, seq, options, consumed, encode)
       iterators.set(id, it)
 
       if (seek) {
@@ -211,15 +221,18 @@ function createRpcStream (db, options, streamOptions) {
       if (it !== undefined) it.close()
     }
 
-    function onclear (req) {
-      db.clear(cleanRangeOptions(req.options), function (err) {
-        callback(req.id, err)
-      })
+    async function onclear (req) {
+      try {
+        await db.clear(cleanRangeOptions(req.options))
+        return callback(req.id, null)
+      } catch (err) {
+        return callback(req.id, err)
+      }
     }
   }
 }
 
-class Iterator {
+class ManyLevelHostIterator {
   constructor (db, id, seq, options, consumed, encode) {
     options = cleanRangeOptions(options)
 
@@ -245,7 +258,7 @@ class Iterator {
     this.pendingAcks = 0
   }
 
-  next (first) {
+  async next (first) {
     if (this[kBusy] || this[kClosed]) return
     if (this[kEnded] || this.pendingAcks > 1) return
 
@@ -269,7 +282,12 @@ class Iterator {
     if (size <= 0) {
       process.nextTick(this[kHandleMany], null, [])
     } else {
-      this[kIterator].nextv(size, this[kHandleMany])
+      try {
+        const nextVal = await this[kIterator].nextv(size)
+        this[kHandleMany](null, nextVal)
+      } catch (err) {
+        this[kHandleMany](err, [])
+      }
     }
   }
 
@@ -341,10 +359,10 @@ class Iterator {
     }
   }
 
-  close () {
+  async close () {
     if (this[kClosed]) return
     this[kClosed] = true
-    this[kIterator].close(noop)
+    await this[kIterator].close()
   }
 }
 
