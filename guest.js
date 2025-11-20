@@ -356,7 +356,11 @@ class ManyLevelGuest extends AbstractLevel {
 
     if (this[kRpcStream]) {
       const finishedPromise = finished(this[kRpcStream]).catch(() => null)
-      this[kRpcStream].destroy().catch(() => null)
+      try {
+        this[kRpcStream].destroy()
+      } catch {
+        // nothing goes here
+      }
       await finishedPromise
       if (this[kCleanup]) await this[kCleanup]
       this[kRpcStream] = null
